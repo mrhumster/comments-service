@@ -1,0 +1,190 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"gorm.io/gorm"
+
+	"github.com/google/uuid"
+	"github.com/mrhumster/comments-service/internal/domain/models"
+	"github.com/mrhumster/comments-service/internal/queue/mock"
+	repomock "github.com/mrhumster/comments-service/internal/repository/mock"
+	"github.com/stretchr/testify/require"
+	gomock "go.uber.org/mock/gomock"
+)
+
+func newTestService(t *testing.T) (*CommentsServiceImpl, *repomock.MockCommentRepository, *mock.MockActivityEventRecorder) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	repo := repomock.NewMockCommentRepository(ctrl)
+	rec := mock.NewMockActivityEventRecorder(ctrl)
+	svc := NewCommentsServiceImpl(repo)
+	svc.WithActivityRecorder(rec)
+	return svc, repo, rec
+}
+
+func verifiedActor() Actor {
+	return Actor{UserID: uuid.New(), Role: "member", EmailVerified: true}
+}
+
+func TestCreateGates(t *testing.T) {
+	t.Run("unverified member rejected", func(t *testing.T) {
+		svc, _, rec := newTestService(t)
+		_, err := svc.Create(context.Background(), Actor{UserID: uuid.New(), Role: "member", EmailVerified: false}, uuid.New(), nil, "hello")
+		require.ErrorIs(t, err, ErrEmailNotVerified)
+		_ = rec
+	})
+
+	t.Run("admin bypasses gate and empty body", func(t *testing.T) {
+		svc, repo, rec := newTestService(t)
+		repo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+		rec.EXPECT().RecordActivityEvent(gomock.Any(), gomock.Any(), EventCommentCreated, gomock.Any(), gomock.Any()).Return(nil)
+
+		c, err := svc.Create(context.Background(), Actor{UserID: uuid.New(), Role: "admin", EmailVerified: false}, uuid.New(), nil, "**hi** <script>alert(1)</script>")
+		require.NoError(t, err)
+		require.Equal(t, "**hi**", c.Body)
+		require.NotEqual(t, uuid.Nil, c.ID)
+	})
+
+	t.Run("empty body after sanitize", func(t *testing.T) {
+		svc, _, _ := newTestService(t)
+		_, err := svc.Create(context.Background(), verifiedActor(), uuid.New(), nil, "<script>alert(1)</script>")
+		require.ErrorIs(t, err, ErrEmptyBody)
+	})
+}
+
+func TestCreateParentValidation(t *testing.T) {
+	parentID := uuid.New()
+
+	t.Run("parent not found", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		repo.EXPECT().GetByID(gomock.Any(), parentID).Return(nil, gorm.ErrRecordNotFound)
+		_, err := svc.Create(context.Background(), verifiedActor(), uuid.New(), &parentID, "reply")
+		require.ErrorIs(t, err, ErrCommentNotFound)
+	})
+
+	t.Run("reply to a reply rejected", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		nestedParent := uuid.New()
+		repo.EXPECT().GetByID(gomock.Any(), parentID).Return(&models.Comment{ID: parentID, ParentID: &nestedParent}, nil)
+		_, err := svc.Create(context.Background(), verifiedActor(), uuid.New(), &parentID, "reply")
+		require.ErrorIs(t, err, ErrInvalidParent)
+	})
+
+	t.Run("reply ok emits comment.replied", func(t *testing.T) {
+		svc, repo, rec := newTestService(t)
+		repo.EXPECT().GetByID(gomock.Any(), parentID).Return(&models.Comment{ID: parentID}, nil)
+		repo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+		rec.EXPECT().RecordActivityEvent(gomock.Any(), gomock.Any(), EventCommentReplied, gomock.Any(), gomock.Any()).Return(nil)
+
+		c, err := svc.Create(context.Background(), verifiedActor(), uuid.New(), &parentID, "nice")
+		require.NoError(t, err)
+		require.Equal(t, parentID, *c.ParentID)
+	})
+}
+
+func TestUpdate(t *testing.T) {
+	owner := uuid.New()
+	commentID := uuid.New()
+
+	t.Run("not found", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		repo.EXPECT().GetByID(gomock.Any(), commentID).Return(nil, gorm.ErrRecordNotFound)
+		_, err := svc.Update(context.Background(), verifiedActor(), commentID, "new")
+		require.ErrorIs(t, err, ErrCommentNotFound)
+	})
+
+	t.Run("foreign user forbidden", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		repo.EXPECT().GetByID(gomock.Any(), commentID).Return(&models.Comment{ID: commentID, UserID: uuid.New()}, nil)
+		_, err := svc.Update(context.Background(), verifiedActor(), commentID, "new")
+		require.ErrorIs(t, err, ErrCommentForbidden)
+	})
+
+	t.Run("author updates own", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		now := time.Now().UTC()
+		repo.EXPECT().GetByID(gomock.Any(), commentID).Return(&models.Comment{ID: commentID, UserID: owner}, nil)
+		updated := &models.Comment{ID: commentID, UserID: owner, Body: "new", EditedAt: &now}
+		repo.EXPECT().UpdateBody(gomock.Any(), commentID, "new", gomock.Any()).Return(updated, nil)
+
+		c, err := svc.Update(context.Background(), Actor{UserID: owner, Role: "member"}, commentID, "new")
+		require.NoError(t, err)
+		require.Equal(t, "new", c.Body)
+		require.NotNil(t, c.EditedAt)
+	})
+
+	t.Run("admin can update any", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		others := &models.Comment{ID: commentID, UserID: uuid.New()}
+		repo.EXPECT().GetByID(gomock.Any(), commentID).Return(others, nil)
+		repo.EXPECT().UpdateBody(gomock.Any(), commentID, "new", gomock.Any()).Return(others, nil)
+
+		_, err := svc.Update(context.Background(), Actor{UserID: uuid.New(), Role: "admin"}, commentID, "new")
+		require.NoError(t, err)
+	})
+}
+
+func TestDelete(t *testing.T) {
+	commentID := uuid.New()
+
+	t.Run("not found", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		repo.EXPECT().GetByID(gomock.Any(), commentID).Return(nil, gorm.ErrRecordNotFound)
+		require.ErrorIs(t, svc.Delete(context.Background(), verifiedActor(), commentID), ErrCommentNotFound)
+	})
+
+	t.Run("foreign user forbidden", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		repo.EXPECT().GetByID(gomock.Any(), commentID).Return(&models.Comment{ID: commentID, UserID: uuid.New()}, nil)
+		require.ErrorIs(t, svc.Delete(context.Background(), verifiedActor(), commentID), ErrCommentForbidden)
+	})
+
+	t.Run("author deletes", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		owner := uuid.New()
+		repo.EXPECT().GetByID(gomock.Any(), commentID).Return(&models.Comment{ID: commentID, UserID: owner}, nil)
+		repo.EXPECT().Delete(gomock.Any(), commentID).Return(nil)
+		require.NoError(t, svc.Delete(context.Background(), Actor{UserID: owner, Role: "member"}, commentID))
+	})
+}
+
+func TestListTopCursor(t *testing.T) {
+	t.Run("next cursor present on full page", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		streamID := uuid.New()
+		now := time.Now().UTC()
+		items := []*models.CommentView{
+			{Comment: models.Comment{ID: uuid.New(), CreatedAt: now}},
+			{Comment: models.Comment{ID: uuid.New(), CreatedAt: now.Add(-time.Minute)}},
+		}
+		repo.EXPECT().ListByStream(gomock.Any(), streamID, 2, gomock.Nil(), gomock.Nil()).Return(items, nil)
+
+		got, next, err := svc.ListTop(context.Background(), streamID, 2, nil)
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		require.NotNil(t, next)
+		require.Equal(t, items[1].ID, next.ID)
+	})
+
+	t.Run("no next cursor on short page", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		repo.EXPECT().ListByStream(gomock.Any(), gomock.Any(), 50, gomock.Nil(), gomock.Nil()).Return([]*models.CommentView{}, nil)
+		_, next, err := svc.ListTop(context.Background(), uuid.New(), 50, nil)
+		require.NoError(t, err)
+		require.Nil(t, next)
+	})
+}
+
+func TestRecordEventBestEffort(t *testing.T) {
+	svc, repo, rec := newTestService(t)
+	repo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	rec.EXPECT().RecordActivityEvent(gomock.Any(), gomock.Any(), EventCommentCreated, gomock.Any(), gomock.Any()).Return(errors.New("redis down"))
+
+	c, err := svc.Create(context.Background(), verifiedActor(), uuid.New(), nil, "still persists")
+	require.NoError(t, err)
+	require.NotNil(t, c)
+}
