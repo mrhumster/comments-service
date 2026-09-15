@@ -18,6 +18,7 @@ import (
 	"github.com/mrhumster/comments-service/internal/queue"
 	"github.com/mrhumster/comments-service/internal/repository"
 	"github.com/mrhumster/comments-service/internal/service"
+	"github.com/mrhumster/comments-service/internal/stream"
 )
 
 var (
@@ -61,6 +62,7 @@ func main() {
 	repo := repository.NewGormCommentRepository(db)
 	svc := service.NewCommentsServiceImpl(repo)
 	svc.WithActivityRecorder(recorder)
+	svc.WithStreamStatusClient(stream.NewStatusClient(cfg.Stream.BaseURL))
 
 	r := routes.SetupRoutes(db, cfg, svc, tokens)
 

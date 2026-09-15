@@ -108,6 +108,47 @@ func TestCreateVerified(t *testing.T) {
 	}
 }
 
+func TestCreateStreamGateErrors(t *testing.T) {
+	t.Run("stream not published", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		svc := svcmock.NewMockCommentsService(ctrl)
+		defer ctrl.Finish()
+		svc.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Nil(), "hi").Return(nil, service.ErrStreamNotPublished)
+
+		w := do("POST", "/streams/"+uuid.New().String()+"/comments", svc)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "stream is not published") {
+			t.Errorf("missing error reason")
+		}
+	})
+
+	t.Run("stream not found", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		svc := svcmock.NewMockCommentsService(ctrl)
+		defer ctrl.Finish()
+		svc.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Nil(), "hi").Return(nil, service.ErrStreamNotFound)
+
+		w := do("POST", "/streams/"+uuid.New().String()+"/comments", svc)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", w.Code)
+		}
+	})
+
+	t.Run("stream service unavailable", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		svc := svcmock.NewMockCommentsService(ctrl)
+		defer ctrl.Finish()
+		svc.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Nil(), "hi").Return(nil, service.ErrStreamUnavailable)
+
+		w := do("POST", "/streams/"+uuid.New().String()+"/comments", svc)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d", w.Code)
+		}
+	})
+}
+
 func TestUpdateForbidden(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	svc := svcmock.NewMockCommentsService(ctrl)

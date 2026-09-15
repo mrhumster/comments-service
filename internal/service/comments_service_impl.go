@@ -11,6 +11,7 @@ import (
 	"github.com/mrhumster/comments-service/internal/queue"
 	"github.com/mrhumster/comments-service/internal/repository"
 	"github.com/mrhumster/comments-service/internal/sanitize"
+	"github.com/mrhumster/comments-service/internal/stream"
 	"gorm.io/gorm"
 )
 
@@ -22,8 +23,9 @@ const (
 )
 
 type CommentsServiceImpl struct {
-	repo     repository.CommentRepository
-	recorder queue.ActivityEventRecorder
+	repo         repository.CommentRepository
+	recorder     queue.ActivityEventRecorder
+	streamStatus stream.StatusClient
 }
 
 func NewCommentsServiceImpl(repo repository.CommentRepository) *CommentsServiceImpl {
@@ -34,9 +36,17 @@ func (s *CommentsServiceImpl) WithActivityRecorder(r queue.ActivityEventRecorder
 	s.recorder = r
 }
 
+func (s *CommentsServiceImpl) WithStreamStatusClient(c stream.StatusClient) {
+	s.streamStatus = c
+}
+
 func (s *CommentsServiceImpl) Create(ctx context.Context, actor Actor, streamID uuid.UUID, parentID *uuid.UUID, rawBody string) (*models.Comment, error) {
 	if actor.Role != "admin" && !actor.EmailVerified {
 		return nil, ErrEmailNotVerified
+	}
+
+	if err := s.checkStreamCommentable(ctx, streamID); err != nil {
+		return nil, err
 	}
 
 	body := sanitize.Body(rawBody)
@@ -153,6 +163,26 @@ func nextCursor(items []*models.CommentView, limit int) *Cursor {
 	}
 	last := items[len(items)-1]
 	return &Cursor{CreatedAt: last.CreatedAt, ID: last.ID}
+}
+
+// checkStreamCommentable fails closed: no client configured, lookup errors or
+// a non-published/private stream all reject the comment.
+func (s *CommentsServiceImpl) checkStreamCommentable(ctx context.Context, streamID uuid.UUID) error {
+	if s.streamStatus == nil {
+		return ErrStreamUnavailable
+	}
+	info, err := s.streamStatus.Status(ctx, streamID)
+	if err != nil {
+		if errors.Is(err, stream.ErrStreamNotFound) {
+			return ErrStreamNotFound
+		}
+		slog.Error("check stream status", "error", err)
+		return ErrStreamUnavailable
+	}
+	if !info.Commentable() {
+		return ErrStreamNotPublished
+	}
+	return nil
 }
 
 func (s *CommentsServiceImpl) recordEvent(ctx context.Context, comment *models.Comment, eventType string) {

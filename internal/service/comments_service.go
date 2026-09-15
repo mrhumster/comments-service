@@ -19,6 +19,9 @@ var (
 	ErrCommentForbidden = errors.New("forbidden")
 	ErrInvalidParent    = errors.New("invalid parent comment")
 	ErrEmptyBody        = errors.New("empty body")
+	ErrStreamNotFound   = errors.New("stream not found")
+	ErrStreamNotPublished = errors.New("stream is not published")
+	ErrStreamUnavailable  = errors.New("stream service unavailable")
 )
 
 // Actor is the authenticated caller: user identity plus JWT claims used by

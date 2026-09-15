@@ -12,6 +12,8 @@ import (
 	"github.com/mrhumster/comments-service/internal/domain/models"
 	"github.com/mrhumster/comments-service/internal/queue/mock"
 	repomock "github.com/mrhumster/comments-service/internal/repository/mock"
+	"github.com/mrhumster/comments-service/internal/stream"
+	streammock "github.com/mrhumster/comments-service/internal/stream/mock"
 	"github.com/stretchr/testify/require"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -23,7 +25,23 @@ func newTestService(t *testing.T) (*CommentsServiceImpl, *repomock.MockCommentRe
 	rec := mock.NewMockActivityEventRecorder(ctrl)
 	svc := NewCommentsServiceImpl(repo)
 	svc.WithActivityRecorder(rec)
+	sclient := streammock.NewMockStatusClient(ctrl)
+	sclient.EXPECT().Status(gomock.Any(), gomock.Any()).
+		Return(&stream.StatusInfo{Status: stream.StatusPublished, Visibility: "public"}, nil).AnyTimes()
+	svc.WithStreamStatusClient(sclient)
 	return svc, repo, rec
+}
+
+func newGateTestService(t *testing.T) (*CommentsServiceImpl, *repomock.MockCommentRepository, *mock.MockActivityEventRecorder, *streammock.MockStatusClient) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	repo := repomock.NewMockCommentRepository(ctrl)
+	rec := mock.NewMockActivityEventRecorder(ctrl)
+	svc := NewCommentsServiceImpl(repo)
+	svc.WithActivityRecorder(rec)
+	sclient := streammock.NewMockStatusClient(ctrl)
+	svc.WithStreamStatusClient(sclient)
+	return svc, repo, rec, sclient
 }
 
 func verifiedActor() Actor {
@@ -187,4 +205,62 @@ func TestRecordEventBestEffort(t *testing.T) {
 	c, err := svc.Create(context.Background(), verifiedActor(), uuid.New(), nil, "still persists")
 	require.NoError(t, err)
 	require.NotNil(t, c)
+}
+
+func TestCreateStreamGate(t *testing.T) {
+	t.Run("published private rejected", func(t *testing.T) {
+		svc, _, _, sclient := newGateTestService(t)
+		streamID := uuid.New()
+		sclient.EXPECT().Status(gomock.Any(), streamID).
+			Return(&stream.StatusInfo{Status: stream.StatusPublished, Visibility: stream.VisibilityPrivate}, nil)
+		_, err := svc.Create(context.Background(), verifiedActor(), streamID, nil, "hello")
+		require.ErrorIs(t, err, ErrStreamNotPublished)
+	})
+
+	t.Run("non-published rejected (admin included)", func(t *testing.T) {
+		svc, _, _, sclient := newGateTestService(t)
+		streamID := uuid.New()
+		sclient.EXPECT().Status(gomock.Any(), streamID).
+			Return(&stream.StatusInfo{Status: "draft", Visibility: "public"}, nil)
+		_, err := svc.Create(context.Background(), Actor{UserID: uuid.New(), Role: "admin", EmailVerified: false}, streamID, nil, "hello")
+		require.ErrorIs(t, err, ErrStreamNotPublished)
+	})
+
+	t.Run("stream not found", func(t *testing.T) {
+		svc, _, _, sclient := newGateTestService(t)
+		streamID := uuid.New()
+		sclient.EXPECT().Status(gomock.Any(), streamID).Return(nil, stream.ErrStreamNotFound)
+		_, err := svc.Create(context.Background(), verifiedActor(), streamID, nil, "hello")
+		require.ErrorIs(t, err, ErrStreamNotFound)
+	})
+
+	t.Run("stream service down fails closed", func(t *testing.T) {
+		svc, _, _, sclient := newGateTestService(t)
+		streamID := uuid.New()
+		sclient.EXPECT().Status(gomock.Any(), streamID).Return(nil, errors.New("dial tcp: refused"))
+		_, err := svc.Create(context.Background(), verifiedActor(), streamID, nil, "hello")
+		require.ErrorIs(t, err, ErrStreamUnavailable)
+	})
+
+	t.Run("no client fails closed", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		repo := repomock.NewMockCommentRepository(ctrl)
+		svc := NewCommentsServiceImpl(repo)
+		_, err := svc.Create(context.Background(), verifiedActor(), uuid.New(), nil, "hello")
+		require.ErrorIs(t, err, ErrStreamUnavailable)
+	})
+
+	t.Run("published unlisted allowed", func(t *testing.T) {
+		svc, repo, rec, sclient := newGateTestService(t)
+		streamID := uuid.New()
+		sclient.EXPECT().Status(gomock.Any(), streamID).
+			Return(&stream.StatusInfo{Status: stream.StatusPublished, Visibility: "unlisted"}, nil)
+		repo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+		rec.EXPECT().RecordActivityEvent(gomock.Any(), gomock.Any(), EventCommentCreated, gomock.Any(), gomock.Any()).Return(nil)
+
+		c, err := svc.Create(context.Background(), verifiedActor(), streamID, nil, "hello")
+		require.NoError(t, err)
+		require.Equal(t, "hello", c.Body)
+	})
 }

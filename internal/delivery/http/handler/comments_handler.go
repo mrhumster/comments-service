@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -198,6 +199,13 @@ func writeServiceError(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid parent comment"})
 	case errors.Is(err, service.ErrEmptyBody):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "body required"})
+	case errors.Is(err, service.ErrStreamNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "stream not found"})
+	case errors.Is(err, service.ErrStreamNotPublished):
+		c.JSON(http.StatusForbidden, gin.H{"error": "stream is not published"})
+	case errors.Is(err, service.ErrStreamUnavailable):
+		slog.Error("stream service unavailable", "error", err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "internal server error"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 	}

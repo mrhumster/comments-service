@@ -12,6 +12,7 @@ type Config struct {
 	Database Database
 	JWT      JWT
 	Redis    Redis
+	Stream   Stream
 }
 
 type Server struct {
@@ -19,6 +20,12 @@ type Server struct {
 	Mode           string
 	AllowedOrigins []string
 	MetricsAddr    string
+}
+
+// Stream is the internal stream-service client used to resolve stream
+// status/visibility and gate comment creation.
+type Stream struct {
+	BaseURL string
 }
 
 type Database struct {
@@ -72,6 +79,9 @@ func LoadConfig() (*Config, error) {
 			Addr:     getEnv("REDIS_ADDR", "localhost"),
 			Password: getEnv("REDIS_PASS", ""),
 			QueueDB:  int(queueDB),
+		},
+		Stream: Stream{
+			BaseURL: getEnv("STREAM_SERVICE_URL", "http://stream-service:80"),
 		},
 	}, nil
 }
