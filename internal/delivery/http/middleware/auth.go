@@ -64,6 +64,7 @@ func Actor(c *gin.Context) service.Actor {
 	return service.Actor{
 		UserID:        userID,
 		Role:          cl.Role,
+		Email:         cl.Email,
 		EmailVerified: cl.EmailVerified,
 	}
 }

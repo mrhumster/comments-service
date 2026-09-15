@@ -63,6 +63,7 @@ func (s *CommentsServiceImpl) Create(ctx context.Context, actor Actor, streamID 
 		ID:        uuid.New(),
 		StreamID:  streamID,
 		UserID:    actor.UserID,
+		UserEmail: actor.Email,
 		ParentID:  parentID,
 		Body:      body,
 		CreatedAt: now,

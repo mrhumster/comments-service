@@ -26,6 +26,7 @@ var (
 type Actor struct {
 	UserID        uuid.UUID
 	Role          string
+	Email         string
 	EmailVerified bool
 }
 

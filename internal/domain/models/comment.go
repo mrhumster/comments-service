@@ -12,6 +12,7 @@ type Comment struct {
 	ID        uuid.UUID  `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	StreamID  uuid.UUID  `json:"stream_id" gorm:"type:uuid;not null;index"`
 	UserID    uuid.UUID  `json:"user_id" gorm:"type:uuid;not null;index"`
+	UserEmail string     `json:"user_email,omitempty" gorm:"type:text"`
 	ParentID  *uuid.UUID `json:"parent_id,omitempty" gorm:"type:uuid"`
 	Body      string     `json:"body" gorm:"type:text;not null"`
 	EditedAt  *time.Time `json:"edited_at,omitempty"`
