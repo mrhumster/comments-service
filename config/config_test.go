@@ -23,6 +23,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	require.Equal(t, "UTC", cfg.Database.TimeZone)
 	require.Equal(t, "localhost", cfg.Redis.Addr)
 	require.Equal(t, 3, cfg.Redis.QueueDB)
+	require.Equal(t, 30, cfg.Server.WriteRateLimitPerMin)
 }
 
 func TestLoadConfigReadsEnv(t *testing.T) {
@@ -38,6 +39,7 @@ func TestLoadConfigReadsEnv(t *testing.T) {
 	t.Setenv("REDIS_ADDR", "redis")
 	t.Setenv("REDIS_PASS", "secret")
 	t.Setenv("REDIS_QUEUE_DB", "5")
+	t.Setenv("WRITE_RATE_LIMIT", "60")
 
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
@@ -54,6 +56,7 @@ func TestLoadConfigReadsEnv(t *testing.T) {
 	require.Equal(t, "redis", cfg.Redis.Addr)
 	require.Equal(t, "secret", cfg.Redis.Password)
 	require.Equal(t, 5, cfg.Redis.QueueDB)
+	require.Equal(t, 60, cfg.Server.WriteRateLimitPerMin)
 
 	dsn := cfg.GetDSN()
 	require.Contains(t, dsn, "host=pg")

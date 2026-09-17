@@ -20,6 +20,10 @@ type Server struct {
 	Mode           string
 	AllowedOrigins []string
 	MetricsAddr    string
+	// WriteRateLimitPerMin caps authenticated write requests per user per
+	// minute (comment create/update/delete). Keyed on the JWT user id, so it
+	// cannot be spoofed; guards against comment spam bursts.
+	WriteRateLimitPerMin int
 }
 
 // Stream is the internal stream-service client used to resolve stream
@@ -55,6 +59,10 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("events queue DB: parse REDIS_QUEUE_DB: %w", err)
 	}
+	writeRateLimit, err := strconv.ParseUint(getEnv("WRITE_RATE_LIMIT", "30"), 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("write rate limit: parse WRITE_RATE_LIMIT: %w", err)
+	}
 
 	return &Config{
 		Database: Database{
@@ -67,10 +75,11 @@ func LoadConfig() (*Config, error) {
 			TimeZone: "UTC",
 		},
 		Server: Server{
-			ServerAddr:     getEnv("SERVER_ADDR", ":8080"),
-			Mode:           getEnv("MODE", "debug"),
-			AllowedOrigins: commaSplit(getEnv("CORS_ALLOW_ORIGINS", "http://localhost:5173,https://example.com,https://comments.example.com")),
-			MetricsAddr:    getEnv("METRICS_ADDR", ""),
+			ServerAddr:           getEnv("SERVER_ADDR", ":8080"),
+			Mode:                 getEnv("MODE", "debug"),
+			AllowedOrigins:       commaSplit(getEnv("CORS_ALLOW_ORIGINS", "http://localhost:5173,https://example.com,https://comments.example.com")),
+			MetricsAddr:          getEnv("METRICS_ADDR", ""),
+			WriteRateLimitPerMin: int(writeRateLimit),
 		},
 		JWT: JWT{
 			AccessPublicKeyURL: os.Getenv("JWT_ACCESS_PUBLIC_KEY_URL"),

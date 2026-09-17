@@ -43,7 +43,7 @@ func SetupRoutes(db *gorm.DB, cfg *config.Config, svc service.CommentsService, t
 	r.GET("/streams/:streamId/comments", h.ListTop)
 	r.GET("/comments/:id/replies", h.ListReplies)
 
-	authed := r.Group("", middleware.AuthMiddleware(tokens))
+	authed := r.Group("", middleware.AuthMiddleware(tokens), middleware.RateLimitPerMin(cfg.Server.WriteRateLimitPerMin))
 	{
 		authed.POST("/streams/:streamId/comments", h.Create)
 		authed.PATCH("/comments/:id", h.Update)
