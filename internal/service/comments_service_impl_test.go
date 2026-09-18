@@ -92,13 +92,36 @@ func TestCreateParentValidation(t *testing.T) {
 		require.ErrorIs(t, err, ErrInvalidParent)
 	})
 
-	t.Run("reply ok emits comment.replied", func(t *testing.T) {
+	t.Run("reply to a parent from another stream rejected", func(t *testing.T) {
+		svc, repo, _ := newTestService(t)
+		streamID := uuid.New()
+		otherStreamID := uuid.New()
+		require.NotEqual(t, streamID, otherStreamID)
+		repo.EXPECT().GetByID(gomock.Any(), parentID).Return(&models.Comment{ID: parentID, StreamID: otherStreamID}, nil)
+		_, err := svc.Create(context.Background(), verifiedActor(), streamID, &parentID, "reply")
+		require.ErrorIs(t, err, ErrInvalidParent)
+	})
+
+	t.Run("replies only within the target stream", func(t *testing.T) {
 		svc, repo, rec := newTestService(t)
-		repo.EXPECT().GetByID(gomock.Any(), parentID).Return(&models.Comment{ID: parentID}, nil)
+		streamID := uuid.New()
+		repo.EXPECT().GetByID(gomock.Any(), parentID).Return(&models.Comment{ID: parentID, StreamID: streamID}, nil)
 		repo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 		rec.EXPECT().RecordActivityEvent(gomock.Any(), gomock.Any(), EventCommentReplied, gomock.Any(), gomock.Any()).Return(nil)
 
-		c, err := svc.Create(context.Background(), verifiedActor(), uuid.New(), &parentID, "nice")
+		c, err := svc.Create(context.Background(), verifiedActor(), streamID, &parentID, "nice")
+		require.NoError(t, err)
+		require.Equal(t, parentID, *c.ParentID)
+	})
+
+	t.Run("reply ok emits comment.replied", func(t *testing.T) {
+		svc, repo, rec := newTestService(t)
+		streamID := uuid.New()
+		repo.EXPECT().GetByID(gomock.Any(), parentID).Return(&models.Comment{ID: parentID, StreamID: streamID}, nil)
+		repo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+		rec.EXPECT().RecordActivityEvent(gomock.Any(), gomock.Any(), EventCommentReplied, gomock.Any(), gomock.Any()).Return(nil)
+
+		c, err := svc.Create(context.Background(), verifiedActor(), streamID, &parentID, "nice")
 		require.NoError(t, err)
 		require.Equal(t, parentID, *c.ParentID)
 	})

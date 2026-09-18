@@ -66,6 +66,11 @@ func (s *CommentsServiceImpl) Create(ctx context.Context, actor Actor, streamID 
 		if parent.ParentID != nil {
 			return nil, ErrInvalidParent
 		}
+		// A reply must stay on the same stream as its parent — otherwise an
+		// attacker could leak/attach content across unrelated streams.
+		if parent.StreamID != streamID {
+			return nil, ErrInvalidParent
+		}
 	}
 
 	now := time.Now().UTC()
