@@ -20,10 +20,19 @@ type Server struct {
 	Mode           string
 	AllowedOrigins []string
 	MetricsAddr    string
+	// TrustedProxies are the reverse proxies (traefik etc.) whose forwarded
+	// (X-Forwarded-For) headers are trusted for the client IP. Default empty
+	// means trust nothing: ClientIP() is the direct peer, so a spoofed
+	// X-Forwarded-For can no longer bypass the read rate limiter.
+	TrustedProxies []string
 	// WriteRateLimitPerMin caps authenticated write requests per user per
 	// minute (comment create/update/delete). Keyed on the JWT user id, so it
 	// cannot be spoofed; guards against comment spam bursts.
 	WriteRateLimitPerMin int
+	// ReadRateLimitPerMin caps public read requests (top-level list and
+	// replies) per client IP per minute. Without auth the key is the direct
+	// peer (all guests share the traefik pod IP), enough to stop bot floods.
+	ReadRateLimitPerMin int
 }
 
 // Stream is the internal stream-service client used to resolve stream
@@ -63,6 +72,10 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("write rate limit: parse WRITE_RATE_LIMIT: %w", err)
 	}
+	readRateLimit, err := strconv.ParseUint(getEnv("COMMENTS_READ_RATE_LIMIT", "300"), 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("comments read rate limit: parse COMMENTS_READ_RATE_LIMIT: %w", err)
+	}
 
 	return &Config{
 		Database: Database{
@@ -79,7 +92,9 @@ func LoadConfig() (*Config, error) {
 			Mode:                 getEnv("MODE", "debug"),
 			AllowedOrigins:       commaSplit(getEnv("CORS_ALLOW_ORIGINS", "http://localhost:5173,https://example.com,https://comments.example.com")),
 			MetricsAddr:          getEnv("METRICS_ADDR", ""),
+			TrustedProxies:       commaSplit(getEnv("TRUSTED_PROXIES", "")),
 			WriteRateLimitPerMin: int(writeRateLimit),
+			ReadRateLimitPerMin:  int(readRateLimit),
 		},
 		JWT: JWT{
 			AccessPublicKeyURL: os.Getenv("JWT_ACCESS_PUBLIC_KEY_URL"),

@@ -24,6 +24,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	require.Equal(t, "localhost", cfg.Redis.Addr)
 	require.Equal(t, 3, cfg.Redis.QueueDB)
 	require.Equal(t, 30, cfg.Server.WriteRateLimitPerMin)
+	require.Equal(t, 300, cfg.Server.ReadRateLimitPerMin)
+	require.Empty(t, cfg.Server.TrustedProxies)
 }
 
 func TestLoadConfigReadsEnv(t *testing.T) {
@@ -40,6 +42,8 @@ func TestLoadConfigReadsEnv(t *testing.T) {
 	t.Setenv("REDIS_PASS", "secret")
 	t.Setenv("REDIS_QUEUE_DB", "5")
 	t.Setenv("WRITE_RATE_LIMIT", "60")
+	t.Setenv("COMMENTS_READ_RATE_LIMIT", "450")
+	t.Setenv("TRUSTED_PROXIES", "10.42.0.1, 10.42.0.0/16")
 
 	cfg, err := LoadConfig()
 	require.NoError(t, err)
@@ -57,6 +61,8 @@ func TestLoadConfigReadsEnv(t *testing.T) {
 	require.Equal(t, "secret", cfg.Redis.Password)
 	require.Equal(t, 5, cfg.Redis.QueueDB)
 	require.Equal(t, 60, cfg.Server.WriteRateLimitPerMin)
+	require.Equal(t, 450, cfg.Server.ReadRateLimitPerMin)
+	require.Equal(t, []string{"10.42.0.1", "10.42.0.0/16"}, cfg.Server.TrustedProxies)
 
 	dsn := cfg.GetDSN()
 	require.Contains(t, dsn, "host=pg")

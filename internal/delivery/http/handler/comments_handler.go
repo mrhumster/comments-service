@@ -42,8 +42,8 @@ type updateCommentRequest struct {
 }
 
 // ListTop returns top-level comments for a stream, newest first.
-// Public endpoint (stream membership is not checked — the read API mirrors
-// the public catalog access; private/unlisted streams rely on their URL).
+// Public endpoint gated like the write path: only published, non-private
+// streams expose their comments (403/404/503 otherwise, fail-closed).
 //   - limit (default 50, max 100)
 //   - cursor — base64(RFC3339Nano|id) of the last item's position
 func (h *CommentsHandler) ListTop(c *gin.Context) {
@@ -65,7 +65,7 @@ func (h *CommentsHandler) ListTop(c *gin.Context) {
 
 	items, next, err := h.svc.ListTop(c.Request.Context(), streamID, limit, cursor)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeServiceError(c, err)
 		return
 	}
 
@@ -77,7 +77,8 @@ func (h *CommentsHandler) ListTop(c *gin.Context) {
 }
 
 // ListReplies returns direct children of a top-level comment, oldest first.
-// Public endpoint.
+// Public endpoint with the same read gate as ListTop (resolved via the
+// parent comment's stream).
 func (h *CommentsHandler) ListReplies(c *gin.Context) {
 	parentID, ok := parseUUID(c, c.Param("id"))
 	if !ok {
@@ -97,7 +98,7 @@ func (h *CommentsHandler) ListReplies(c *gin.Context) {
 
 	items, next, err := h.svc.ListReplies(c.Request.Context(), parentID, limit, cursor)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		writeServiceError(c, err)
 		return
 	}
 

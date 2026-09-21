@@ -99,6 +99,13 @@ func (s *CommentsServiceImpl) Create(ctx context.Context, actor Actor, streamID 
 }
 
 func (s *CommentsServiceImpl) ListTop(ctx context.Context, streamID uuid.UUID, limit int, cursor *Cursor) ([]*models.CommentView, *Cursor, error) {
+	// Read gate mirrors the write gate: comments are only exposed on
+	// published, non-private streams. Fails closed (404/403/503) so the
+	// endpoint cannot be used as an existence/visibility oracle.
+	if err := s.checkStreamCommentable(ctx, streamID); err != nil {
+		return nil, nil, err
+	}
+
 	var beforeCreatedAt *time.Time
 	var beforeID *uuid.UUID
 	if cursor != nil {
@@ -114,6 +121,20 @@ func (s *CommentsServiceImpl) ListTop(ctx context.Context, streamID uuid.UUID, l
 }
 
 func (s *CommentsServiceImpl) ListReplies(ctx context.Context, parentID uuid.UUID, limit int, cursor *Cursor) ([]*models.CommentView, *Cursor, error) {
+	// Resolve the parent comment to its stream, then apply the same read
+	// gate — otherwise replies of comments on private/draft streams could
+	// be leaked through this endpoint.
+	parent, err := s.repo.GetByID(ctx, parentID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, ErrCommentNotFound
+		}
+		return nil, nil, err
+	}
+	if err := s.checkStreamCommentable(ctx, parent.StreamID); err != nil {
+		return nil, nil, err
+	}
+
 	var afterCreatedAt *time.Time
 	var afterID *uuid.UUID
 	if cursor != nil {

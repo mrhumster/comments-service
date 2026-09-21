@@ -220,6 +220,100 @@ func TestListTopCursor(t *testing.T) {
 	})
 }
 
+func TestListReadGate(t *testing.T) {
+	t.Run("published public stream exposed", func(t *testing.T) {
+		svc, repo, _, sclient := newGateTestService(t)
+		streamID := uuid.New()
+		sclient.EXPECT().Status(gomock.Any(), streamID).
+			Return(&stream.StatusInfo{Status: stream.StatusPublished, Visibility: "public"}, nil)
+		repo.EXPECT().ListByStream(gomock.Any(), streamID, 50, gomock.Nil(), gomock.Nil()).
+			Return([]*models.CommentView{}, nil)
+
+		_, _, err := svc.ListTop(context.Background(), streamID, 50, nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("published private rejected", func(t *testing.T) {
+		svc, _, _, sclient := newGateTestService(t)
+		streamID := uuid.New()
+		sclient.EXPECT().Status(gomock.Any(), streamID).
+			Return(&stream.StatusInfo{Status: stream.StatusPublished, Visibility: stream.VisibilityPrivate}, nil)
+		_, _, err := svc.ListTop(context.Background(), streamID, 50, nil)
+		require.ErrorIs(t, err, ErrStreamNotPublished)
+	})
+
+	t.Run("non-published rejected", func(t *testing.T) {
+		svc, _, _, sclient := newGateTestService(t)
+		streamID := uuid.New()
+		sclient.EXPECT().Status(gomock.Any(), streamID).
+			Return(&stream.StatusInfo{Status: "draft", Visibility: "public"}, nil)
+		_, _, err := svc.ListTop(context.Background(), streamID, 50, nil)
+		require.ErrorIs(t, err, ErrStreamNotPublished)
+	})
+
+	t.Run("stream not found", func(t *testing.T) {
+		svc, _, _, sclient := newGateTestService(t)
+		streamID := uuid.New()
+		sclient.EXPECT().Status(gomock.Any(), streamID).Return(nil, stream.ErrStreamNotFound)
+		_, _, err := svc.ListTop(context.Background(), streamID, 50, nil)
+		require.ErrorIs(t, err, ErrStreamNotFound)
+	})
+
+	t.Run("stream service down fails closed", func(t *testing.T) {
+		svc, _, _, sclient := newGateTestService(t)
+		streamID := uuid.New()
+		sclient.EXPECT().Status(gomock.Any(), streamID).Return(nil, errors.New("dial tcp: refused"))
+		_, _, err := svc.ListTop(context.Background(), streamID, 50, nil)
+		require.ErrorIs(t, err, ErrStreamUnavailable)
+	})
+
+	t.Run("no client fails closed", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		repo := repomock.NewMockCommentRepository(ctrl)
+		svc := NewCommentsServiceImpl(repo)
+		_, _, err := svc.ListTop(context.Background(), uuid.New(), 50, nil)
+		require.ErrorIs(t, err, ErrStreamUnavailable)
+	})
+}
+
+func TestListRepliesReadGate(t *testing.T) {
+	streamID := uuid.New()
+
+	t.Run("parent not found", func(t *testing.T) {
+		svc, repo, _, _ := newGateTestService(t)
+		parentID := uuid.New()
+		repo.EXPECT().GetByID(gomock.Any(), parentID).Return(nil, gorm.ErrRecordNotFound)
+		_, _, err := svc.ListReplies(context.Background(), parentID, 50, nil)
+		require.ErrorIs(t, err, ErrCommentNotFound)
+	})
+
+	t.Run("parent on private stream rejected", func(t *testing.T) {
+		svc, repo, _, sclient := newGateTestService(t)
+		parentID := uuid.New()
+		repo.EXPECT().GetByID(gomock.Any(), parentID).
+			Return(&models.Comment{ID: parentID, StreamID: streamID}, nil)
+		sclient.EXPECT().Status(gomock.Any(), streamID).
+			Return(&stream.StatusInfo{Status: stream.StatusPublished, Visibility: stream.VisibilityPrivate}, nil)
+		_, _, err := svc.ListReplies(context.Background(), parentID, 50, nil)
+		require.ErrorIs(t, err, ErrStreamNotPublished)
+	})
+
+	t.Run("parent on commentable stream exposed", func(t *testing.T) {
+		svc, repo, _, sclient := newGateTestService(t)
+		parentID := uuid.New()
+		repo.EXPECT().GetByID(gomock.Any(), parentID).
+			Return(&models.Comment{ID: parentID, StreamID: streamID}, nil)
+		sclient.EXPECT().Status(gomock.Any(), streamID).
+			Return(&stream.StatusInfo{Status: stream.StatusPublished, Visibility: "public"}, nil)
+		repo.EXPECT().ListReplies(gomock.Any(), parentID, 50, gomock.Nil(), gomock.Nil()).
+			Return([]*models.CommentView{}, nil)
+
+		_, _, err := svc.ListReplies(context.Background(), parentID, 50, nil)
+		require.NoError(t, err)
+	})
+}
+
 func TestRecordEventBestEffort(t *testing.T) {
 	svc, repo, rec := newTestService(t)
 	repo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)

@@ -78,6 +78,65 @@ func TestListTopInvalidCursor(t *testing.T) {
 	}
 }
 
+func TestListTopReadGateErrors(t *testing.T) {
+	streamID := uuid.New().String()
+	path := "/streams/" + streamID + "/comments"
+
+	t.Run("stream not published", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		svc := svcmock.NewMockCommentsService(ctrl)
+		defer ctrl.Finish()
+		svc.EXPECT().ListTop(gomock.Any(), gomock.Any(), 50, gomock.Nil()).Return(nil, nil, service.ErrStreamNotPublished)
+
+		w := do("GET", path, svc)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "stream is not published") {
+			t.Errorf("missing error reason")
+		}
+	})
+
+	t.Run("stream not found", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		svc := svcmock.NewMockCommentsService(ctrl)
+		defer ctrl.Finish()
+		svc.EXPECT().ListTop(gomock.Any(), gomock.Any(), 50, gomock.Nil()).Return(nil, nil, service.ErrStreamNotFound)
+
+		w := do("GET", path, svc)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "stream not found") {
+			t.Errorf("missing error reason")
+		}
+	})
+
+	t.Run("stream service unavailable", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		svc := svcmock.NewMockCommentsService(ctrl)
+		defer ctrl.Finish()
+		svc.EXPECT().ListTop(gomock.Any(), gomock.Any(), 50, gomock.Nil()).Return(nil, nil, service.ErrStreamUnavailable)
+
+		w := do("GET", path, svc)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d", w.Code)
+		}
+	})
+
+	t.Run("comment not found on replies", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		svc := svcmock.NewMockCommentsService(ctrl)
+		defer ctrl.Finish()
+		svc.EXPECT().ListReplies(gomock.Any(), gomock.Any(), 50, gomock.Nil()).Return(nil, nil, service.ErrCommentNotFound)
+
+		w := do("GET", "/comments/"+uuid.New().String()+"/replies", svc)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", w.Code)
+		}
+	})
+}
+
 func TestCreateUnverified(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	svc := svcmock.NewMockCommentsService(ctrl)

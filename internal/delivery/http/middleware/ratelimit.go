@@ -55,10 +55,11 @@ func (r *rateLimiter) allow(key string) bool {
 	return wc.count <= r.limit
 }
 
-// RateLimitPerMin rejects write requests from a single user (identified by
-// the user id AuthMiddleware placed in the context) once they exceed limit
-// requests within a minute. Run it AFTER AuthMiddleware so the key is the
-// tamper-proof JWT user id rather than a spoofable client IP.
+// RateLimitPerMin rejects requests from a single client once they exceed
+// limit requests within a minute. The key is the JWT user id when the caller
+// is authenticated (tamper-proof, used for writes) and otherwise the direct
+// peer IP (trusted-proxy list must be set to the reverse-proxy pool, or the
+// IP is spoofable via X-Forwarded-For and the limiter is bypassable).
 func RateLimitPerMin(limit int) gin.HandlerFunc {
 	if limit <= 0 {
 		limit = 30

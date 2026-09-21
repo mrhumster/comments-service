@@ -15,8 +15,9 @@ import (
 )
 
 // SetupRoutes builds the REST API:
-//   - public read: top-level comments per stream + replies (list access
-//     mirrors the public catalog; private/unlisted rely on URL knowledge)
+//   - public read: top-level comments per stream + replies, both gated on
+//     published && non-private stream status (fail-closed 404/403/503) and
+//     rate limited per client
 //   - authenticated write: create/update/delete with verified-email gate
 //   - health and metrics
 func SetupRoutes(db *gorm.DB, cfg *config.Config, svc service.CommentsService, tokens *service.TokenService) *gin.Engine {
@@ -28,6 +29,12 @@ func SetupRoutes(db *gorm.DB, cfg *config.Config, svc service.CommentsService, t
 
 	r := gin.New()
 	r.Use(gin.Recovery())
+	if err := r.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
+		// Invalid config should not silently re-enable spoofable ClientIP;
+		// trust none (direct peer only) and surface the misconfiguration.
+		log.Printf("trusted proxies: %v", err)
+		_ = r.SetTrustedProxies(nil)
+	}
 	r.Use(middleware.MetricsMiddleware())
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     cfg.Server.AllowedOrigins,
@@ -38,10 +45,14 @@ func SetupRoutes(db *gorm.DB, cfg *config.Config, svc service.CommentsService, t
 
 	h := handler.NewCommentsHandler(svc)
 
-	// Public read. Stream membership is not checked here (there is no
-	// stream-service call); this mirrors GetStream access semantics.
-	r.GET("/streams/:streamId/comments", h.ListTop)
-	r.GET("/comments/:id/replies", h.ListReplies)
+	// Public read, gated on stream commentability (published && non-private)
+	// and rate limited per direct peer IP (trusted-proxy list is empty by
+	// default, so a spoofed X-Forwarded-For does not grant a fresh budget).
+	public := r.Group("", middleware.RateLimitPerMin(cfg.Server.ReadRateLimitPerMin))
+	{
+		public.GET("/streams/:streamId/comments", h.ListTop)
+		public.GET("/comments/:id/replies", h.ListReplies)
+	}
 
 	authed := r.Group("", middleware.AuthMiddleware(tokens), middleware.RateLimitPerMin(cfg.Server.WriteRateLimitPerMin))
 	{
